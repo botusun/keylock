@@ -26,6 +26,16 @@ open KeyLock.xcodeproj
 
 Select the **KeyLock** scheme, choose your Mac as the target, then press **Cmd + R**.
 
+### Remove quarantine (downloaded builds)
+
+If you downloaded a pre-built `.app` instead of building from source, macOS may block it with a quarantine flag. To remove it:
+
+```bash
+xattr -d com.apple.quarantine /Applications/KeyLock.app
+```
+
+Then open the app normally.
+
 ## Usage
 
 1. Launch KeyLock.
