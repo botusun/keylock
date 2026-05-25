@@ -1,6 +1,6 @@
 # KeyLock
 
-A lightweight macOS menu-bar utility that blocks all keyboard input with a single click — useful when cleaning your keyboard, letting a pet walk across it, or handing your laptop to someone who should not be typing.
+A lightweight macOS app that blocks all keyboard input with a single click — useful when cleaning your keyboard, letting a pet walk across it, or handing your laptop to someone who should not be typing.
 
 ## Features
 
