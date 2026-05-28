@@ -12,7 +12,13 @@ class KeyboardLocker: ObservableObject {
     init() {
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             let trusted = AXIsProcessTrusted()
-            DispatchQueue.main.async { self?.hasAccessibilityPermission = trusted }
+            DispatchQueue.main.async {
+                self?.hasAccessibilityPermission = trusted
+                if trusted {
+                    self?.permissionTimer?.invalidate()
+                    self?.permissionTimer = nil
+                }
+            }
         }
     }
 

@@ -1,4 +1,31 @@
 import SwiftUI
+import AppKit
+
+private class WindowDelegate: NSObject, NSWindowDelegate {
+    let locker: KeyboardLocker
+
+    init(locker: KeyboardLocker) { self.locker = locker }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        !locker.isLocked
+    }
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let locker: KeyboardLocker
+
+    func makeCoordinator() -> WindowDelegate { WindowDelegate(locker: locker) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            view.window?.delegate = context.coordinator
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
 struct ContentView: View {
     @ObservedObject var locker: KeyboardLocker
@@ -58,6 +85,7 @@ struct ContentView: View {
         }
         .padding(32)
         .frame(width: 320)
+        .background(WindowAccessor(locker: locker))
     }
 }
 
