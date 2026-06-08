@@ -8,7 +8,7 @@ A lightweight macOS app that blocks all keyboard input with a single click — u
 - Blocks key-down, key-up, modifier keys, and system keys (volume, brightness, media)
 - Live status indicator (locked / active)
 - Accessibility permission prompt built in
-- Minimal 320 × 320 window, stays floating while locked
+- Polished compact control window, stays floating while locked
 
 ## Requirements
 
