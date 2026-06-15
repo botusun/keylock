@@ -1,5 +1,57 @@
 import Cocoa
 import ApplicationServices
+import IOKit
+import IOKit.hidsystem
+
+// MARK: - Caps Lock control (IOKit HID)
+
+/// Caps Lock is toggled in the IOKit HID layer *below* a CGEvent tap, so simply
+/// swallowing its `flagsChanged` event does not stop the physical lock state from
+/// flipping. We force the desired state back through IOHIDSystem instead.
+private func openHIDService() -> io_connect_t {
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(kIOHIDSystemClass))
+    guard service != 0 else { return 0 }
+    defer { IOObjectRelease(service) }
+
+    var connect: io_connect_t = 0
+    guard IOServiceOpen(service, mach_task_self_, UInt32(kIOHIDParamConnectType), &connect) == KERN_SUCCESS else {
+        return 0
+    }
+    return connect
+}
+
+private func getCapsLockState() -> Bool {
+    let connect = openHIDService()
+    guard connect != 0 else { return false }
+    defer { IOServiceClose(connect) }
+
+    var state = false
+    IOHIDGetModifierLockState(connect, Int32(kIOHIDCapsLockState), &state)
+    return state
+}
+
+private func setCapsLockState(_ on: Bool) {
+    let connect = openHIDService()
+    guard connect != 0 else { return }
+    defer { IOServiceClose(connect) }
+
+    IOHIDSetModifierLockState(connect, Int32(kIOHIDCapsLockState), on)
+}
+
+/// The Caps Lock state to hold while locked (whatever it was when locking began).
+private var heldCapsLockState = false
+
+/// Virtual keycode for the Caps Lock key.
+private let kCapsLockKeyCode: Int64 = 57
+
+private let eventTapCallback: CGEventTapCallBack = { _, type, event, _ in
+    // Re-assert the held Caps Lock state if the user pressed Caps Lock.
+    if type == .flagsChanged, event.getIntegerValueField(.keyboardEventKeycode) == kCapsLockKeyCode {
+        setCapsLockState(heldCapsLockState)
+    }
+    // Swallow every key/modifier/system event so nothing reaches any app.
+    return nil
+}
 
 class KeyboardLocker: ObservableObject {
     @Published var isLocked = false
@@ -44,6 +96,9 @@ class KeyboardLocker: ObservableObject {
             return
         }
 
+        // Remember the current Caps Lock state and hold it for the lock duration.
+        heldCapsLockState = getCapsLockState()
+
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
                               | (1 << CGEventType.keyUp.rawValue)
                               | (1 << CGEventType.flagsChanged.rawValue)
@@ -54,7 +109,7 @@ class KeyboardLocker: ObservableObject {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: mask,
-            callback: { _, _, _, _ in nil },
+            callback: eventTapCallback,
             userInfo: nil
         ) else { return }
 

@@ -16,6 +16,6 @@ struct KeyLockApp: App {
             ContentView(locker: locker)
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 380, height: 440)
+        .defaultSize(width: 340, height: 420)
     }
 }
