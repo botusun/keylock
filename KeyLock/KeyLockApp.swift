@@ -15,6 +15,7 @@ struct KeyLockApp: App {
         WindowGroup {
             ContentView(locker: locker)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: 340, height: 420)
     }

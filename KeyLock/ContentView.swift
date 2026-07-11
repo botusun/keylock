@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Window plumbing
+
 private class WindowDelegate: NSObject, NSWindowDelegate {
     let locker: KeyboardLocker
 
@@ -19,7 +21,11 @@ private struct WindowAccessor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
-            view.window?.delegate = context.coordinator
+            guard let window = view.window else { return }
+            window.delegate = context.coordinator
+            window.isMovableByWindowBackground = true
+            window.titlebarAppearsTransparent = true
+            window.standardWindowButton(.zoomButton)?.isHidden = true
         }
         return view
     }
@@ -27,75 +33,87 @@ private struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+// MARK: - Palette
+
+private enum Palette {
+    /// Hot rose — input is blocked.
+    static let locked = Color(red: 1.00, green: 0.27, blue: 0.40)
+    /// Azure — keyboard is live, ready to lock.
+    static let ready = Color(red: 0.30, green: 0.61, blue: 1.00)
+    /// Amber — permission warning.
+    static let warn = Color(red: 1.00, green: 0.70, blue: 0.22)
+}
+
+// MARK: - Root view
+
 struct ContentView: View {
     @ObservedObject var locker: KeyboardLocker
 
+    private var accent: Color { locker.isLocked ? Palette.locked : Palette.ready }
+
     var body: some View {
         ZStack {
-            FocusBackground(isLocked: locker.isLocked, accentColor: accentColor)
+            PlateBackground(isLocked: locker.isLocked, accent: accent)
 
             VStack(spacing: 0) {
-                header
+                topBar
 
-                Spacer(minLength: 26)
+                Spacer(minLength: 30)
 
-                LockOrb(isLocked: locker.isLocked, accentColor: accentColor) {
+                KeycapButton(isLocked: locker.isLocked, accent: accent) {
                     locker.toggleLock()
                 }
                 .accessibilityLabel(locker.isLocked ? "Unlock keyboard" : "Lock keyboard")
                 .accessibilityHint(locker.isLocked ? "Restores keyboard input" : "Blocks keyboard input")
 
-                Spacer(minLength: 22)
+                Spacer(minLength: 26)
 
-                VStack(spacing: 6) {
-                    Text(locker.isLocked ? "Keyboard Locked" : "Keyboard Ready")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .contentTransition(.interpolate)
-
-                    Text(locker.isLocked ? "Tap the dial to restore input" : "Tap the dial to block input")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .multilineTextAlignment(.center)
+                statusBlock
 
                 if !locker.hasAccessibilityPermission {
-                    PermissionCallout(action: locker.openAccessibilitySettings)
-                        .padding(.top, 22)
+                    PermissionCard(action: locker.openAccessibilitySettings)
+                        .padding(.top, 20)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 22)
-            .padding(.bottom, 30)
+            .padding(.horizontal, 26)
+            .padding(.top, 34) // clears the traffic lights — the title bar is hidden
+            .padding(.bottom, 28)
         }
         .frame(width: 340)
         .fixedSize(horizontal: false, vertical: true)
-        .animation(.spring(response: 0.45, dampingFraction: 0.78), value: locker.isLocked)
+        .animation(.spring(response: 0.42, dampingFraction: 0.8), value: locker.isLocked)
         .animation(.easeInOut(duration: 0.25), value: locker.hasAccessibilityPermission)
         .background(WindowAccessor(locker: locker))
     }
 
-    private var accentColor: Color {
-        locker.isLocked
-            ? Color(red: 0.17, green: 0.66, blue: 0.45)
-            : Color(red: 0.97, green: 0.47, blue: 0.16)
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "keyboard.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(accentColor)
-
-            Text("KeyLock")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.primary)
+    private var topBar: some View {
+        HStack {
+            Text("KEYLOCK")
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .tracking(4)
+                .foregroundStyle(.secondary)
 
             Spacer(minLength: 12)
 
-            StatusPill(isLocked: locker.isLocked, tint: accentColor)
+            StatusChip(isLocked: locker.isLocked, accent: accent)
         }
+    }
+
+    private var statusBlock: some View {
+        VStack(spacing: 7) {
+            Text(locker.isLocked ? "Input Blocked" : "Ready to Lock")
+                .font(.system(size: 25, weight: .heavy, design: .rounded))
+                .foregroundStyle(.primary)
+                .contentTransition(.interpolate)
+
+            Text(locker.isLocked
+                 ? "Press the key to restore typing"
+                 : "Press the key to silence the keyboard")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
     }
 }
 
@@ -103,204 +121,182 @@ struct ContentView: View {
     ContentView(locker: KeyboardLocker())
 }
 
-// MARK: - Lock Orb
+// MARK: - Keycap
 
-private struct LockOrb: View {
-    @Environment(\.colorScheme) private var colorScheme
+/// A physical keyboard key resting in a recessed well. The cap sits raised while
+/// the keyboard is live and stays pressed down while input is locked.
+private struct KeycapButton: View {
+    @Environment(\.colorScheme) private var scheme
     let isLocked: Bool
-    let accentColor: Color
+    let accent: Color
     let action: () -> Void
 
-    @State private var breathe = false
+    @State private var glow = false
 
-    private let disc: CGFloat = 132      // inner sphere
-    private let ringInset: CGFloat = 14  // accent ring sits outside the disc
-    private var ringSize: CGFloat { disc + ringInset * 2 }
-    private var tickRadius: CGFloat { ringSize / 2 + 15 }
-    private var canvas: CGFloat { (tickRadius + 8) * 2 }
+    private let wellSize: CGFloat = 176
+    private let capSize: CGFloat = 138
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                halo
-                tickGauge
-                trackRing
-                accentArc
-                sphere
-                glyph
+                well
+                cap
             }
-            .frame(width: canvas, height: canvas)
-            .contentShape(Circle())
+            .frame(width: wellSize, height: wellSize)
+            .contentShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
         }
-        .buttonStyle(OrbButtonStyle())
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
-        }
+        .buttonStyle(KeycapPressStyle())
+        .onAppear(perform: syncGlow)
+        .onChange(of: isLocked) { _ in syncGlow() }
     }
 
-    // Soft colored glow behind the dial — breathes gently, stronger when locked.
-    private var halo: some View {
-        Circle()
-            .fill(accentColor)
-            .frame(width: disc, height: disc)
-            .opacity(isLocked ? (breathe ? 0.40 : 0.26) : (breathe ? 0.22 : 0.14))
-            .blur(radius: 28)
-            .scaleEffect(breathe ? 1.08 : 0.94)
-    }
-
-    // Precision-gauge tick ring — minor + major ticks that tint accent when locked.
-    private var tickGauge: some View {
-        ZStack {
-            ForEach(0..<60, id: \.self) { i in
-                let major = i % 5 == 0
-                Capsule()
-                    .fill(tickColor(major: major))
-                    .frame(width: major ? 2.4 : 1.6, height: major ? 9 : 5)
-                    .offset(y: -tickRadius)
-                    .rotationEffect(.degrees(Double(i) / 60 * 360))
-            }
-        }
-    }
-
-    private var trackRing: some View {
-        Circle()
-            .stroke(accentColor.opacity(colorScheme == .dark ? 0.16 : 0.14), lineWidth: 9)
-            .frame(width: ringSize, height: ringSize)
-    }
-
-    // Accent progress arc with an angular-gradient sweep and a glow.
-    private var accentArc: some View {
-        Circle()
-            .trim(from: 0, to: isLocked ? 1 : 0.16)
-            .stroke(
-                AngularGradient(
-                    colors: [accentColor.opacity(0.55), accentColor, accentColor.opacity(0.9)],
-                    center: .center,
-                    startAngle: .degrees(0),
-                    endAngle: .degrees(360)
-                ),
-                style: StrokeStyle(lineWidth: 9, lineCap: .round)
-            )
-            .rotationEffect(.degrees(-90))
-            .frame(width: ringSize, height: ringSize)
-            .shadow(color: accentColor.opacity(0.45), radius: 7)
-    }
-
-    // Glossy spherical disc: gradient body + top specular + faked inner shadow + rim.
-    private var sphere: some View {
-        Circle()
+    private var well: some View {
+        RoundedRectangle(cornerRadius: 42, style: .continuous)
             .fill(
-                LinearGradient(colors: discColors, startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: wellColors, startPoint: .top, endPoint: .bottom)
             )
-            .frame(width: disc, height: disc)
-            .overlay(specular)
-            .overlay(innerShadow)
+            .overlay(wellInnerShadow)
             .overlay(
-                Circle().strokeBorder(.white.opacity(colorScheme == .dark ? 0.12 : 0.7), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 42, style: .continuous)
+                    .strokeBorder(accent.opacity(isLocked ? 0.75 : 0.22), lineWidth: isLocked ? 1.8 : 1)
             )
-            .clipShape(Circle())
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.16), radius: 14, y: 7)
+            .shadow(color: accent.opacity(isLocked ? (glow ? 0.55 : 0.28) : 0.10),
+                    radius: isLocked ? (glow ? 26 : 14) : 10)
     }
 
-    private var specular: some View {
-        Ellipse()
+    // Darkened top lip inside the well so the cavity reads as recessed.
+    private var wellInnerShadow: some View {
+        RoundedRectangle(cornerRadius: 42, style: .continuous)
+            .stroke(Color.black.opacity(scheme == .dark ? 0.55 : 0.18), lineWidth: 10)
+            .blur(radius: 8)
+            .offset(y: 5)
+            .mask(RoundedRectangle(cornerRadius: 42, style: .continuous))
+            .allowsHitTesting(false)
+    }
+
+    private var cap: some View {
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
             .fill(
-                LinearGradient(
-                    colors: [.white.opacity(colorScheme == .dark ? 0.20 : 0.85), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                LinearGradient(colors: capColors, startPoint: .top, endPoint: .bottom)
             )
-            .frame(width: disc * 0.74, height: disc * 0.5)
-            .offset(y: -disc * 0.22)
-            .blur(radius: 3)
-            .allowsHitTesting(false)
-    }
-
-    private var innerShadow: some View {
-        Circle()
-            .stroke(Color.black.opacity(colorScheme == .dark ? 0.5 : 0.16), lineWidth: 9)
-            .blur(radius: 6)
-            .offset(y: 2)
-            .mask(Circle())
-            .allowsHitTesting(false)
+            .overlay(
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(scheme == .dark ? 0.22 : 0.9), .white.opacity(0.02)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1.2
+                    )
+            )
+            .overlay(glyph)
+            .frame(width: capSize, height: capSize)
+            .offset(y: isLocked ? 7 : -5)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.6 : 0.25),
+                    radius: isLocked ? 3 : 13,
+                    y: isLocked ? 2 : 10)
     }
 
     private var glyph: some View {
         Image(systemName: isLocked ? "lock.fill" : "lock.open.fill")
-            .font(.system(size: 44, weight: .bold))
-            .foregroundStyle(accentColor)
+            .font(.system(size: 42, weight: .bold))
+            .foregroundStyle(accent)
             .symbolRenderingMode(.hierarchical)
             .contentTransition(.opacity)
-            .shadow(color: accentColor.opacity(0.25), radius: 6)
+            .shadow(color: accent.opacity(isLocked ? 0.55 : 0.2), radius: 9)
     }
 
-    private func tickColor(major: Bool) -> Color {
+    private var wellColors: [Color] {
+        scheme == .dark
+            ? [Color(red: 0.035, green: 0.04, blue: 0.055), Color(red: 0.10, green: 0.11, blue: 0.14)]
+            : [Color(red: 0.78, green: 0.80, blue: 0.84), Color(red: 0.90, green: 0.91, blue: 0.94)]
+    }
+
+    private var capColors: [Color] {
+        scheme == .dark
+            ? [Color(red: 0.21, green: 0.22, blue: 0.26), Color(red: 0.12, green: 0.13, blue: 0.16)]
+            : [Color.white, Color(red: 0.89, green: 0.91, blue: 0.94)]
+    }
+
+    private func syncGlow() {
         if isLocked {
-            return accentColor.opacity(major ? 0.85 : 0.45)
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) { glow = true }
+        } else {
+            withAnimation(.easeOut(duration: 0.3)) { glow = false }
         }
-        return Color.primary.opacity(major ? 0.30 : 0.15)
-    }
-
-    private var discColors: [Color] {
-        if colorScheme == .dark {
-            return [Color(red: 0.20, green: 0.21, blue: 0.23), Color(red: 0.11, green: 0.12, blue: 0.13)]
-        }
-        return [Color.white, Color(red: 0.92, green: 0.94, blue: 0.96)]
     }
 }
 
-private struct OrbButtonStyle: ButtonStyle {
+private struct KeycapPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .animation(.spring(response: 0.28, dampingFraction: 0.6), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.965 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.65), value: configuration.isPressed)
     }
 }
 
 // MARK: - Chrome
 
-private struct FocusBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
+/// Keyboard-plate backdrop: solid base, faint dot grid, and an accent wash
+/// pooled behind the keycap.
+private struct PlateBackground: View {
+    @Environment(\.colorScheme) private var scheme
     let isLocked: Bool
-    let accentColor: Color
+    let accent: Color
 
     var body: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            base
 
-            // Top-down sheen for subtle vertical depth.
-            LinearGradient(
-                colors: [.white.opacity(colorScheme == .dark ? 0.04 : 0.5), .clear],
-                startPoint: .top,
-                endPoint: .center
-            )
+            DotGrid()
+                .foregroundStyle(Color.primary.opacity(scheme == .dark ? 0.055 : 0.07))
 
-            // Accent glow pooled behind the orb.
             RadialGradient(
-                colors: [
-                    accentColor.opacity(glowOpacity),
-                    .clear
-                ],
+                colors: [accent.opacity(washOpacity), .clear],
                 center: UnitPoint(x: 0.5, y: 0.42),
-                startRadius: 8,
-                endRadius: 260
+                startRadius: 10,
+                endRadius: 250
             )
         }
     }
 
-    private var glowOpacity: Double {
-        let dark = colorScheme == .dark
-        if isLocked { return dark ? 0.26 : 0.18 }
-        return dark ? 0.16 : 0.11
+    private var base: Color {
+        scheme == .dark
+            ? Color(red: 0.065, green: 0.07, blue: 0.09)
+            : Color(red: 0.94, green: 0.95, blue: 0.97)
+    }
+
+    private var washOpacity: Double {
+        let dark = scheme == .dark
+        if isLocked { return dark ? 0.30 : 0.20 }
+        return dark ? 0.15 : 0.11
     }
 }
 
-private struct StatusPill: View {
+private struct DotGrid: View {
+    var body: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 16
+            let radius: CGFloat = 1
+            var y = spacing / 2
+            while y < size.height {
+                var x = spacing / 2
+                while x < size.width {
+                    let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
+                    context.fill(Path(ellipseIn: rect), with: .style(.primary))
+                    x += spacing
+                }
+                y += spacing
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct StatusChip: View {
     let isLocked: Bool
-    let tint: Color
+    let accent: Color
 
     @State private var pulse = false
 
@@ -309,25 +305,26 @@ private struct StatusPill: View {
             ZStack {
                 if isLocked {
                     Circle()
-                        .fill(tint)
-                        .frame(width: 7, height: 7)
-                        .scaleEffect(pulse ? 2.2 : 1)
+                        .fill(accent)
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(pulse ? 2.4 : 1)
                         .opacity(pulse ? 0 : 0.6)
                 }
                 Circle()
-                    .fill(tint)
-                    .frame(width: 7, height: 7)
+                    .fill(accent)
+                    .frame(width: 6, height: 6)
             }
 
-            Text(isLocked ? "Locked" : "Ready")
-                .font(.caption.weight(.semibold))
+            Text(isLocked ? "LOCKED" : "READY")
+                .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                .tracking(1.5)
                 .lineLimit(1)
         }
-        .foregroundStyle(tint)
+        .foregroundStyle(accent)
         .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(tint.opacity(0.12), in: Capsule())
-        .overlay(Capsule().stroke(tint.opacity(0.22), lineWidth: 1))
+        .frame(height: 24)
+        .background(accent.opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(accent.opacity(0.3), lineWidth: 1))
         .onChange(of: isLocked) { locked in
             if locked {
                 withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { pulse = true }
@@ -338,39 +335,36 @@ private struct StatusPill: View {
     }
 }
 
-private struct PermissionCallout: View {
+private struct PermissionCard: View {
     let action: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.shield.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.98, green: 0.64, blue: 0.16))
-                    .frame(width: 28, height: 28)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.warn)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Accessibility Access Needed")
-                        .font(.subheadline.weight(.semibold))
-
-                    Text("Enable KeyLock in System Settings before locking.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text("Accessibility access needed")
+                    .font(.system(size: 12.5, weight: .semibold))
             }
 
+            Text("macOS requires permission before KeyLock can intercept keys.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Button(action: action) {
-                Label("Open System Settings", systemImage: "gearshape.fill")
+                Label("Open System Settings", systemImage: "arrow.up.forward.square")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.small)
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(13)
+        .background(Palette.warn.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Palette.warn.opacity(0.28), lineWidth: 1)
         )
     }
 }
