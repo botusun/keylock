@@ -2,7 +2,7 @@
 
 A lightweight macOS app that blocks all keyboard input with a single click — useful when cleaning your keyboard, letting a pet walk across it, or handing your laptop to someone who should not be typing.
 
-![image.png](https://images.voidcode.com/pics/d6a0a6eacdb14e667074853c141e9f5a.png)
+![image.png](https://images.voidcode.com/pics/fca82c57095a3bddb754b7490ab42da6.png)
 
 ## Features
 
